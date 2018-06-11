@@ -92,7 +92,11 @@ public class EncryptBytesCommand : PSCmdlet {
         {
             Aes.Key = key;
             Aes.Padding = PaddingMode.PKCS7;
-            Aes.IV = new byte[128/8];
+            Byte[] myIV = new Byte[128/8];
+            Array.Copy(key, myIV, 128/8);
+            Aes.IV = myIV;
+            WriteVerbose(String.Join(",", Aes.Key));
+            WriteVerbose(String.Join(",", Aes.IV));
             // Create an encryptor to perform the stream transform.
             ICryptoTransform encryptor = Aes.CreateEncryptor();
 
@@ -149,7 +153,11 @@ public class DecryptBytesCommand : PSCmdlet {
             WriteVerbose(String.Format("Decrypting.. Array Size:{0}", cipherText.Length ) );
             Aes.Key = key;
             Aes.Padding = PaddingMode.PKCS7;
-            Aes.IV = new byte[128/8];
+            Byte[] myIV = new Byte[128/8];
+            Array.Copy(key, myIV, 128/8);
+            Aes.IV = myIV;
+            WriteVerbose(String.Join(",", Aes.Key));
+            WriteVerbose(String.Join(",", Aes.IV));
             // Create a decryptor to perform the stream transform.
             ICryptoTransform decryptor = Aes.CreateDecryptor();
 
