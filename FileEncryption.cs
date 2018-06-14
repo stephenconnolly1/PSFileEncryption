@@ -1,3 +1,13 @@
+
+/*
+Cmdlet to encrypt a file using a password, similar to OpenSSL symmetric encryption function.
+The Password is salted and used to generated an encryption key and an initialization vector.
+The Salt and IV is generated each time a file is encrypted to guard against known-plaintext
+attacks. 
+The password Salt and IV are stored as a header in the encrypted file. The salt allows the 
+Key to be regenerated reliably from the password and the IV is used for the decryption of the remainder 
+of the file.
+ */
 using System;
 using System.IO;
 using System.Text;
@@ -6,182 +16,9 @@ using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Management.Automation;
 
-
 /*
 USAGE:
-$key = Get-CryptoKey $(ConvertTo-SecureString 'asdfasdf' -AsPlainText -Force)
-*/
-[Cmdlet(VerbsCommon.Get, "CryptoKey", DefaultParameterSetName="PatternParameterSet")]
-public class GetKeyCommand : PSCmdlet {
-    [Parameter(
-        Position=0,
-        Mandatory=true
-    )]
-    public SecureString Key
-    {
-        get {return key;}
-        set {key = value;}
-    }
-    private SecureString key;
-
-    protected override void ProcessRecord()
-    {
-        WriteVerbose("Processing Key ...");
-        IntPtr valuePtr = IntPtr.Zero;
-        try {
-          valuePtr = Marshal.SecureStringToGlobalAllocUnicode(key);
-          ASCIIEncoding ascii = new ASCIIEncoding();
-          Byte[] encodedKey = ascii.GetBytes(Marshal.PtrToStringUni(valuePtr) );
-          WriteVerbose(String.Format("Key Length: {0}", encodedKey.Length));
-          if (encodedKey.Length > 32)
-          {
-              Array.Resize(ref encodedKey, 32);
-          }
-          if (encodedKey.Length < 32)
-          {
-              int toPad = 32-encodedKey.Length;
-              WriteVerbose(String.Format("Padding {0} characters", toPad));
-              Array.Resize(ref encodedKey, 32);
-              for (int i = (32 - toPad); i < 32; i++)
-              {
-                  encodedKey[i] = 0x0;
-              }
-          }
-          WriteObject(encodedKey);
-        }
-        catch (Exception e)
-        {
-          WriteError (new ErrorRecord(e, "Key Padding Error", ErrorCategory.InvalidOperation, key));
-        }
-        finally
-        {
-          Marshal.ZeroFreeGlobalAllocUnicode(valuePtr);
-        }
-    }
-}
-
-/*
-USAGE:
-$CipherText = Encrypt-Bytes -ClearText $bytes -CryptoKey $key
-*/
-[Cmdlet("Encrypt", "Bytes", DefaultParameterSetName="PatternParameterSet")]
-public class EncryptBytesCommand : PSCmdlet {
-    [Parameter(
-        Position=0,
-        Mandatory=true
-    )]
-    public Byte[] Key
-    {
-        get {return key;}
-        set {key = value;}
-    }
-    private Byte[] key;
-
-    [Parameter(
-        Position=1,
-        Mandatory=true
-    )]
-    public Byte[] ClearText
-    {
-        get {return clearText;}
-        set {clearText = value;}
-    }
-    private Byte[] clearText;
-
-    protected override void ProcessRecord()
-    {
-        try
-        {
-            using(AesManaged Aes = new AesManaged() )
-            {
-                Aes.Key = key;
-                Aes.Padding = PaddingMode.PKCS7;
-                Byte[] myIV = new Byte[128/8];
-                Array.Copy(key, myIV, 128/8);
-                Aes.IV = myIV;
-                WriteVerbose(String.Join(",", Aes.Key));
-                WriteVerbose(String.Join(",", Aes.IV));
-                // Create an encryptor to perform the stream transform.
-                ICryptoTransform encryptor = Aes.CreateEncryptor();
-
-                // Create the streams used for encryption.
-                using (MemoryStream memoryStream = new MemoryStream())
-                {
-                    using (CryptoStream cryptoStream = new CryptoStream(memoryStream, encryptor, CryptoStreamMode.Write))
-                    {
-                        using (BinaryWriter binaryWriter = new BinaryWriter(cryptoStream))
-                        {
-                            // Write the data to the stream
-                            binaryWriter.Write(clearText, 0, clearText.Length);
-                        }
-                        WriteObject(memoryStream.ToArray());
-                    }
-                }
-            }
-        } catch (Exception e) {}
-    }
-}
-
-//
-/*
-USAGE:
-$PlainText = Decrypt-Bytes -CipherText $bytes -CryptoKey $key
-*/
-[Cmdlet("Decrypt", "Bytes", DefaultParameterSetName="PatternParameterSet")]
-public class DecryptBytesCommand : PSCmdlet {
-    [Parameter(
-        Position=0,
-        Mandatory=true
-    )]
-    public Byte[] Key
-    {
-        get {return key;}
-        set {key = value;}
-    }
-    private Byte[] key;
-
-    [Parameter(
-        Position=1,
-        Mandatory=true
-    )]
-    public Byte[] CipherText
-    {
-        get {return cipherText;}
-        set {cipherText = value;}
-    }
-    private Byte[] cipherText;
-
-    protected override void ProcessRecord()
-    {
-        using(AesManaged Aes = new AesManaged() )
-        {
-            WriteVerbose(String.Format("Decrypting.. Array Size:{0}", cipherText.Length ) );
-            Aes.Key = key;
-            Aes.Padding = PaddingMode.PKCS7;
-            Byte[] myIV = new Byte[128/8];
-            Array.Copy(key, myIV, 128/8);
-            Aes.IV = myIV;
-            WriteVerbose(String.Join(",", Aes.Key));
-            WriteVerbose(String.Join(",", Aes.IV));
-            // Create a decryptor to perform the stream transform.
-            ICryptoTransform decryptor = Aes.CreateDecryptor();
-
-            // Create the streams used for encryption.
-            using (MemoryStream memoryStream = new MemoryStream())
-            {
-                using (CryptoStream cryptoStream = new CryptoStream(memoryStream, decryptor, CryptoStreamMode.Write))
-                {
-                    // Read the data from the ciphertext
-                    cryptoStream.Write(cipherText, 0, cipherText.Length);
-                    WriteObject(memoryStream.ToArray());
-                }
-            }
-        }
-    }
-}
-
-/*
-USAGE:
+$pwd = Read-Host -AsSecureString
 Encrypt-File -InputFile $infile -OutputFile $outfile -Password $pwd
 */
 [Cmdlet("Encrypt", "File", DefaultParameterSetName="PatternParameterSet")]
@@ -221,27 +58,23 @@ public class EncryptFileCommand : PSCmdlet {
 
     protected override void ProcessRecord()
     {
+        byte[] salt = new byte[64/8]; 
+        byte[] keyAndIV = new byte[256/8];
+        byte[] myKey = new byte[128/8];
+        byte[] myIV = new byte[128/8];
+
         try 
         {
             using(AesManaged Aes = new AesManaged() )
             {
-                WriteVerbose("CreateRandomSalt()");
-                byte[] salt = KeyDeriver.CreateRandomSalt(8);
-                WriteVerbose("GetKeyAndIV()");
-                byte[] keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);
-                WriteVerbose("Copying crypto data to CSP");
-                WriteVerbose(String.Format("Length: {0}", keyAndIV.Length));
-                byte[] myKey = new byte[128/8];
-                byte[] myIV = new byte[128/8];
-                WriteVerbose("Copying Key");
-                Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
-                WriteVerbose("Copying IV");
-                Array.Copy(keyAndIV, 128/8, myIV, 0, 128/8);
+                salt = KeyDeriver.CreateRandomSalt(8);
+                keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
                 Aes.Key = myKey;
+                Array.Copy(keyAndIV, 128/8, myIV, 0, 128/8);
                 Aes.IV = myIV;
                 Aes.Padding = PaddingMode.PKCS7;
                 WriteVerbose("Salt: " + String.Join(",", salt));
-                WriteVerbose("Key: " + String.Join(",", Aes.Key));
+                WriteDebug("Key: " + String.Join(",", Aes.Key));
                 WriteVerbose("IV: "+ String.Join(",", Aes.IV));
                 // Create an encryptor to perform the stream transform.
                 ICryptoTransform encryptor = Aes.CreateEncryptor();
@@ -265,13 +98,13 @@ public class EncryptFileCommand : PSCmdlet {
                             while ( (read = fsIn.Read(buffer, 0, buffer.Length)) > 0 )
                             {
                                 bytesRead += read;
-                                WriteDebug(String.Format("Read {0} bytes",read));
-                                WriteProgress(new ProgressRecord( 1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
+                                WriteDebug(String.Format("Read {0} bytes", read));
+                                WriteProgress(new ProgressRecord(1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
                                 // for the last block, only write the correct number of bytes
                                 cryptoStream.Write(buffer, 0, read);
                             }
                         }
-                    }
+                    } 
                 }
             }
         }
@@ -279,12 +112,20 @@ public class EncryptFileCommand : PSCmdlet {
         {
             WriteError(new ErrorRecord(e, e.StackTrace, ErrorCategory.DeviceError, null ));
         }
+        finally 
+        {
+            Array.Clear(salt, 0, salt.Length); 
+            Array.Clear(keyAndIV, 0, keyAndIV.Length);
+            Array.Clear(myKey, 0, myKey.Length);
+            Array.Clear(myIV, 0, myIV.Length);
+        }
     }
 }
 
 /*
 USAGE:
-Decrypt-File -InputFile $infile -OutputFile $outfile -CryptoKey $key
+$pwd = Read-Host -AsSecureString
+Decrypt-File -InputFile $infile -OutputFile $outfile -Password $pwd
 */
 [Cmdlet("Decrypt", "File", DefaultParameterSetName="PatternParameterSet")]
 public class DecryptFileCommand : PSCmdlet {
@@ -323,6 +164,11 @@ public class DecryptFileCommand : PSCmdlet {
 
     protected override void ProcessRecord()
     {
+        byte[] salt = new byte[8]; 
+        byte[] keyAndIV = new byte[256/8];
+        byte[] myKey = new byte[128/8];
+        byte[] myIV = new byte[128/8];
+
         try
         {
             using(AesManaged Aes = new AesManaged() )
@@ -330,21 +176,14 @@ public class DecryptFileCommand : PSCmdlet {
             // read the salt from the file header
             using (FileStream fsIn = new FileStream(inputFile, FileMode.Open))
             {
-                byte[] salt = new Byte[8];
                 fsIn.Read(salt, 0, salt.Length);
-                byte[] keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);
-                byte[] myKey = new byte[128/8];
-                byte[] myIV = new byte[128/8];
+                keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);
                 // read the IV from the file header (don't reuse the IV or the Salt)
                 fsIn.Read(myIV, 0, myIV.Length);
-                WriteVerbose("Copying Key");
+                Aes.IV = myIV;
                 Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
                 Aes.Key = myKey;
-                Aes.IV = myIV;
                 Aes.Padding = PaddingMode.PKCS7;
-                WriteVerbose("Salt: " + String.Join(",", salt));
-                WriteVerbose("Key: " + String.Join(",", Aes.Key));
-                WriteVerbose("IV: "+ String.Join(",", Aes.IV));
                 // Create an encryptor to perform the stream transform.
                 ICryptoTransform decryptor = Aes.CreateDecryptor();
                 int offset = salt.Length + myIV.Length;
@@ -376,6 +215,12 @@ public class DecryptFileCommand : PSCmdlet {
         } catch (Exception e) 
         {
             WriteError(new ErrorRecord(e, "There was an error", ErrorCategory.DeviceError, null ));
+        } finally
+        {
+                Array.Clear(salt, 0, salt.Length); 
+                Array.Clear(keyAndIV, 0, keyAndIV.Length);
+                Array.Clear(myKey, 0, myKey.Length);
+                Array.Clear(myIV, 0, myIV.Length);
         }
     }
 }
@@ -429,14 +274,4 @@ public class KeyDeriver {
             Marshal.ZeroFreeGlobalAllocUnicode(valuePtr);
         }
     }
-} 
-
-/* TODO
-// Derive a random salt (8 bytes) value for this encryption session use CreateRandomSalt from https://msdn.microsoft.com/en-us/library/system.security.cryptography.passwordderivebytes(v=vs.110).aspx 
-// Derive a session key (128 bits) and an IV (8 bits) from from the (user-supplied) password key and the salt using PasswordDeriveBytes() 
-// Check that the derived bytearray is always the same if using the same salt and password (needed for decryption)
-// write the salt and IV to the start of the output stream - they aren't secret
-// Encrypt the file using the key and from the password and random salt value 
-// To decrypt...
-
-*/
+}

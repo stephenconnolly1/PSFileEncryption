@@ -5,8 +5,8 @@ c:\windows\Microsoft.Net\Framework\v4.0.30319\csc.exe -nologo -reference:C:\WIND
     goto :end
 )
 
-::PowerShell.exe -ExecutionPolicy Bypass -NoProfile -NoLogo -Command "& {$VerbosePreference='Continue'; Import-Module FileEncryption; $key = Get-CryptoKey $(ConvertTo-SecureString -String 'mykeymykeymykeymykeymykeymykey123' -Force -AsPlainText); $ciphertext = Encrypt-Bytes -ClearText (0x1,0x2,0x3,0x4) -Key $key; write-output $ciphertext; $plaintext = Decrypt-Bytes -CipherText $ciphertext -Key $key; $plaintext }"
 PowerShell.exe -ExecutionPolicy Bypass -NoProfile -NoLogo -Command "& {$VerbosePreference='Continue'; Import-Module FileEncryption; $password = ConvertTo-SecureString -String 'mykeymykeymykeymykeymykeymykey123' -Force -AsPlainText; Encrypt-File -InputFile boot2docker.iso -OutputFile boot2docker.iso.crypt -Password $password }"
 PowerShell.exe -ExecutionPolicy Bypass -NoProfile -NoLogo -Command "& {$VerbosePreference='Continue'; Import-Module FileEncryption; $password = ConvertTo-SecureString -String 'mykeymykeymykeymykeymykeymykey123' -Force -AsPlainText; Decrypt-File -InputFile boot2docker.iso.crypt -OutputFile boot2docker.iso.decrypt -Password $password }"
+REM Test that the round trip leaves the original and en-de-crypted file identical.
 PowerShell.exe -ExecutionPolicy Bypass -NoProfile -NoLogo -Command "& { get-childitem *.iso* | Get-FileHash -Algorithm MD5 }"
 :end
