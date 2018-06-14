@@ -90,32 +90,35 @@ public class EncryptBytesCommand : PSCmdlet {
 
     protected override void ProcessRecord()
     {
-        using(AesManaged Aes = new AesManaged() )
+        try
         {
-            Aes.Key = key;
-            Aes.Padding = PaddingMode.PKCS7;
-            Byte[] myIV = new Byte[128/8];
-            Array.Copy(key, myIV, 128/8);
-            Aes.IV = myIV;
-            WriteVerbose(String.Join(",", Aes.Key));
-            WriteVerbose(String.Join(",", Aes.IV));
-            // Create an encryptor to perform the stream transform.
-            ICryptoTransform encryptor = Aes.CreateEncryptor();
-
-            // Create the streams used for encryption.
-            using (MemoryStream memoryStream = new MemoryStream())
+            using(AesManaged Aes = new AesManaged() )
             {
-                using (CryptoStream cryptoStream = new CryptoStream(memoryStream, encryptor, CryptoStreamMode.Write))
+                Aes.Key = key;
+                Aes.Padding = PaddingMode.PKCS7;
+                Byte[] myIV = new Byte[128/8];
+                Array.Copy(key, myIV, 128/8);
+                Aes.IV = myIV;
+                WriteVerbose(String.Join(",", Aes.Key));
+                WriteVerbose(String.Join(",", Aes.IV));
+                // Create an encryptor to perform the stream transform.
+                ICryptoTransform encryptor = Aes.CreateEncryptor();
+
+                // Create the streams used for encryption.
+                using (MemoryStream memoryStream = new MemoryStream())
                 {
-                    using (BinaryWriter binaryWriter = new BinaryWriter(cryptoStream))
+                    using (CryptoStream cryptoStream = new CryptoStream(memoryStream, encryptor, CryptoStreamMode.Write))
                     {
-                        // Write the data to the stream
-                        binaryWriter.Write(clearText, 0, clearText.Length);
+                        using (BinaryWriter binaryWriter = new BinaryWriter(cryptoStream))
+                        {
+                            // Write the data to the stream
+                            binaryWriter.Write(clearText, 0, clearText.Length);
+                        }
+                        WriteObject(memoryStream.ToArray());
                     }
-                    WriteObject(memoryStream.ToArray());
                 }
             }
-        }
+        } catch (Exception e) {}
     }
 }
 
@@ -168,11 +171,8 @@ public class DecryptBytesCommand : PSCmdlet {
             {
                 using (CryptoStream cryptoStream = new CryptoStream(memoryStream, decryptor, CryptoStreamMode.Write))
                 {
-                    using (BinaryWriter binaryWriter = new BinaryWriter(cryptoStream))
-                    {
-                        // Read the data from the ciphertext
-                        binaryWriter.Write(cipherText, 0, cipherText.Length);
-                    }
+                    // Read the data from the ciphertext
+                    cryptoStream.Write(cipherText, 0, cipherText.Length);
                     WriteObject(memoryStream.ToArray());
                 }
             }
@@ -182,7 +182,7 @@ public class DecryptBytesCommand : PSCmdlet {
 
 /*
 USAGE:
-Encrypt-File -InputFile $infile -OutputFile $outfile -CryptoKey $key
+Encrypt-File -InputFile $infile -OutputFile $outfile -Password $pwd
 */
 [Cmdlet("Encrypt", "File", DefaultParameterSetName="PatternParameterSet")]
 public class EncryptFileCommand : PSCmdlet {
@@ -212,51 +212,72 @@ public class EncryptFileCommand : PSCmdlet {
         Position=3,
         Mandatory=true
     )]
-    public Byte[] Key
+    public SecureString Password
     {
-        get {return key;}
-        set {key = value;}
+        get {return password;}
+        set {password = value;}
     }
-    private Byte[] key;
+    private SecureString password;
 
     protected override void ProcessRecord()
     {
-        using(AesManaged Aes = new AesManaged() )
+        try 
         {
-            Aes.Key = key;
-            Aes.Padding = PaddingMode.PKCS7;
-            Byte[] myIV = new Byte[128/8];
-            Array.Copy(key, myIV, 128/8);
-            Aes.IV = myIV;
-            WriteVerbose(String.Join(",", Aes.Key));
-            WriteVerbose(String.Join(",", Aes.IV));
-            // Create an encryptor to perform the stream transform.
-            ICryptoTransform encryptor = Aes.CreateEncryptor();
-
-            // Create the streams used for encryption.
-            using (FileStream fsCrypt = new FileStream(outputFile, FileMode.Create))
+            using(AesManaged Aes = new AesManaged() )
             {
-                using (CryptoStream cryptoStream = new CryptoStream(fsCrypt, encryptor, CryptoStreamMode.Write))
+                WriteVerbose("CreateRandomSalt()");
+                byte[] salt = KeyDeriver.CreateRandomSalt(8);
+                WriteVerbose("GetKeyAndIV()");
+                byte[] keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);
+                WriteVerbose("Copying crypto data to CSP");
+                WriteVerbose(String.Format("Length: {0}", keyAndIV.Length));
+                byte[] myKey = new byte[128/8];
+                byte[] myIV = new byte[128/8];
+                WriteVerbose("Copying Key");
+                Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
+                WriteVerbose("Copying IV");
+                Array.Copy(keyAndIV, 128/8, myIV, 0, 128/8);
+                Aes.Key = myKey;
+                Aes.IV = myIV;
+                Aes.Padding = PaddingMode.PKCS7;
+                WriteVerbose("Salt: " + String.Join(",", salt));
+                WriteVerbose("Key: " + String.Join(",", Aes.Key));
+                WriteVerbose("IV: "+ String.Join(",", Aes.IV));
+                // Create an encryptor to perform the stream transform.
+                ICryptoTransform encryptor = Aes.CreateEncryptor();
+
+                // Create the streams used for encryption.
+                using (FileStream fsCrypt = new FileStream(outputFile, FileMode.Create))
                 {
-                    using (FileStream fsIn = new FileStream(inputFile, FileMode.Open))
+                    // Write these (non-secret) bits of data to the stream so the decryptor can decrypt!! 
+                    fsCrypt.Write(salt, 0, salt.Length);
+                    fsCrypt.Write(Aes.IV, 0, Aes.IV.Length);
+                    using (CryptoStream cryptoStream = new CryptoStream(fsCrypt, encryptor, CryptoStreamMode.Write))
                     {
-                        // Write the data to the stream
-                        Int64 fileSizeInBytes = new FileInfo(inputFile).Length;
-                        int read = 0;
-                        // Buffer to optimize encryption but avoid memory exhaustion
-                        byte[] buffer = new byte[Aes.BlockSize*1024];
-                        Int64 bytesRead = 0;
-                        while ( (read = fsIn.Read(buffer, 0, buffer.Length)) > 0 )
+                        using (FileStream fsIn = new FileStream(inputFile, FileMode.Open))
                         {
-                            bytesRead += read;
-                            WriteDebug(String.Format("Read {0} bytes",read));
-                            WriteProgress(new ProgressRecord( 1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
-                            // for the last block, only write the correct number of bytes
-                            cryptoStream.Write(buffer, 0, read);
+                            // Write the data to the stream
+                            Int64 fileSizeInBytes = new FileInfo(inputFile).Length;
+                            int read = 0;
+                            // Buffer to optimize encryption but avoid memory exhaustion
+                            byte[] buffer = new byte[Aes.BlockSize*1024];
+                            Int64 bytesRead = 0;
+                            while ( (read = fsIn.Read(buffer, 0, buffer.Length)) > 0 )
+                            {
+                                bytesRead += read;
+                                WriteDebug(String.Format("Read {0} bytes",read));
+                                WriteProgress(new ProgressRecord( 1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
+                                // for the last block, only write the correct number of bytes
+                                cryptoStream.Write(buffer, 0, read);
+                            }
                         }
                     }
                 }
             }
+        }
+        catch (Exception e) 
+        {
+            WriteError(new ErrorRecord(e, e.StackTrace, ErrorCategory.DeviceError, null ));
         }
     }
 }
@@ -293,51 +314,68 @@ public class DecryptFileCommand : PSCmdlet {
         Position=3,
         Mandatory=true
     )]
-    public Byte[] Key
+    public SecureString Password
     {
-        get {return key;}
-        set {key = value;}
+        get {return password;}
+        set {password = value;}
     }
-    private Byte[] key;
+    private SecureString password;
 
     protected override void ProcessRecord()
     {
-        using(AesManaged Aes = new AesManaged() )
+        try
         {
-            Aes.Key = key;
-            Aes.Padding = PaddingMode.PKCS7;
-            Byte[] myIV = new Byte[128/8];
-            Array.Copy(key, myIV, 128/8);
-            Aes.IV = myIV;
-            WriteVerbose(String.Join(",", Aes.Key));
-            WriteVerbose(String.Join(",", Aes.IV));
-            // Create an encryptor to perform the stream transform.
-            ICryptoTransform decryptor = Aes.CreateDecryptor();
-
-            // Create the streams used for encryption.
-            using (FileStream fsCrypt = new FileStream(outputFile, FileMode.Create))
+            using(AesManaged Aes = new AesManaged() )
             {
-                using (CryptoStream cryptoStream = new CryptoStream(fsCrypt, decryptor, CryptoStreamMode.Write))
+            // read the salt from the file header
+            using (FileStream fsIn = new FileStream(inputFile, FileMode.Open))
+            {
+                byte[] salt = new Byte[8];
+                fsIn.Read(salt, 0, salt.Length);
+                byte[] keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);
+                byte[] myKey = new byte[128/8];
+                byte[] myIV = new byte[128/8];
+                // read the IV from the file header (don't reuse the IV or the Salt)
+                fsIn.Read(myIV, 0, myIV.Length);
+                WriteVerbose("Copying Key");
+                Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
+                Aes.Key = myKey;
+                Aes.IV = myIV;
+                Aes.Padding = PaddingMode.PKCS7;
+                WriteVerbose("Salt: " + String.Join(",", salt));
+                WriteVerbose("Key: " + String.Join(",", Aes.Key));
+                WriteVerbose("IV: "+ String.Join(",", Aes.IV));
+                // Create an encryptor to perform the stream transform.
+                ICryptoTransform decryptor = Aes.CreateDecryptor();
+                int offset = salt.Length + myIV.Length;
+
+                // Create the streams used for encryption.
+                using (FileStream fsCrypt = new FileStream(outputFile, FileMode.Create))
                 {
-                    using (FileStream fsIn = new FileStream(inputFile, FileMode.Open))
+                    using (CryptoStream cryptoStream = new CryptoStream(fsCrypt, decryptor, CryptoStreamMode.Write))
                     {
-                        // Write the data to the stream
-                        Int64 fileSizeInBytes = new FileInfo(inputFile).Length;
-                        int read = 0;
-                        // Buffer to optimize decryption but avoid memory exhaustion
-                        byte[] buffer = new byte[Aes.BlockSize*1024];
-                        Int64 bytesRead = 0;
-                        while ( (read = fsIn.Read(buffer, 0, buffer.Length)) > 0 )
-                        {
-                            bytesRead += read;
-                            WriteDebug(String.Format("Read {0} bytes",read));
-                            WriteProgress(new ProgressRecord( 1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
-                            // for the last block, only write the correct number of bytes
-                            cryptoStream.Write(buffer, 0, read);
+                            // Write the data to the stream
+                            Int64 fileSizeInBytes = new FileInfo(inputFile).Length;
+                            int read = 0;
+                            // Buffer to optimize decryption but avoid memory exhaustion
+                            byte[] buffer = new byte[Aes.BlockSize*1024];
+                            Int64 bytesRead = 0;
+                            fsIn.Seek(offset, SeekOrigin.Begin);
+                            while ( (read = fsIn.Read(buffer, 0, buffer.Length)) > 0 )
+                            {
+                                bytesRead += read;
+                                WriteDebug(String.Format("Read {0} bytes",read));
+                                WriteProgress(new ProgressRecord( 1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
+                                // for the last block, only write the correct number of bytes
+                                cryptoStream.Write(buffer, 0, read);
+                            }
                         }
                     }
                 }
             }
+        } catch (Exception e) 
+        {
+            WriteError(new ErrorRecord(e, "There was an error", ErrorCategory.DeviceError, null ));
         }
     }
 }
@@ -370,12 +408,25 @@ public class KeyDeriver {
         return randBytes;
     }
 
-    /*Returns a byte array containing a (secret) 128-bit key and an IV in the encryption  */
-    public byte[] GetKeyAndIV(string password, byte[] salt)
+    /* Returns a byte array containing a (secret) 128-bit key and an IV in the encryption  */
+    public static byte[] GetKeyAndIV(SecureString password, byte[] salt)
     { 
-        using (PasswordDeriveBytes pdb = new PasswordDeriveBytes(password, salt))
+        
+        using (Rfc2898DeriveBytes rdb = new Rfc2898DeriveBytes(SecureStringToByteArray(password), salt, 1024))
         {
-            return pdb.CryptDeriveKey("TripleDES", "SHA1", (128/8) + 8, salt); 
+            return rdb.GetBytes(256); // Key and IV 
+        }
+    }
+
+    public static byte[] SecureStringToByteArray(SecureString value) 
+    {
+        IntPtr valuePtr = IntPtr.Zero;
+        try {
+            valuePtr = Marshal.SecureStringToGlobalAllocUnicode(value);
+            ASCIIEncoding ascii = new ASCIIEncoding();
+            return ascii.GetBytes(Marshal.PtrToStringUni(valuePtr) );
+        } finally {
+            Marshal.ZeroFreeGlobalAllocUnicode(valuePtr);
         }
     }
 } 
