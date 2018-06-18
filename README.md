@@ -2,7 +2,7 @@
 A PowerShell module to perform symmetric AES based file encryption and decryption using a key 
 derived from a user-provided password
 
-The module is desiged to work in Constrained PowerShell Language environments where native methods of 
+The module is designed to work in Constrained PowerShell Language environments where native methods of 
 .NET objects is forbidden. The module is therefore written in C# code and compiled 
 
 ## Build instructions
