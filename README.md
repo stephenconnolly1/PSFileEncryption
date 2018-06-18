@@ -12,13 +12,17 @@ access is required to install the module.
 
 To build the module
 
- - From GitHub, download the source code as a .zip file and extract to a local folder
+ - From GitHub, download the source code as a .zip file.
+ - Right Click the downloaded zip file and select __Properties__.
+ - On the General tab check __Unblock__ and click __OK__.
+ - Right Click the .zip file and select __Extract All...__.
  - Open a Windows DOS command prompt and change directory to the directory containing the downloaded code
  - Run the following command
    
     `powershell -nologo -noprofile -executionPolicy bypass -file build.ps1`
 
- - The module will be installed into a folder within the user's `$PSModulePath`      
+ - The module will be built and copied into a folder within the user's `$PSModulePath` 
+ - Open a PowerShell window and type `Get-Module -ListAvailable`. The FileEncryption module should be listed.
 
 ## Usage
 <PRE>
