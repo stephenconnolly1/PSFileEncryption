@@ -46,7 +46,7 @@ public class EncryptFileCommand : PSCmdlet {
     private String outputFile; 
 
     [Parameter(
-        Position=3,
+        Position=2,
         Mandatory=true
     )]
     public SecureString Password
@@ -59,7 +59,6 @@ public class EncryptFileCommand : PSCmdlet {
     protected override void ProcessRecord()
     {
         byte[] salt = new byte[64/8]; 
-        byte[] keyAndIV = new byte[256/8];
         byte[] myKey = new byte[128/8];
         byte[] myIV = new byte[128/8];
 
@@ -67,10 +66,12 @@ public class EncryptFileCommand : PSCmdlet {
         {
             using(AesManaged Aes = new AesManaged() )
             {
-                salt = KeyDeriver.CreateRandomSalt(8);
-                keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
+                // Generate random salt and IV for each encryption session to avoid plaintext attacks
+                salt = KeyDeriver.CreateRandomSalt(64/8);
+                myIV = KeyDeriver.CreateRandomSalt(128/8);
+                // Make key derivation expensive to slow down brute force attacks
+                myKey = KeyDeriver.GetKey(password, salt);
                 Aes.Key = myKey;
-                Array.Copy(keyAndIV, 128/8, myIV, 0, 128/8);
                 Aes.IV = myIV;
                 Aes.Padding = PaddingMode.PKCS7;
                 WriteVerbose("Salt: " + String.Join(",", salt));
@@ -115,7 +116,6 @@ public class EncryptFileCommand : PSCmdlet {
         finally 
         {
             Array.Clear(salt, 0, salt.Length); 
-            Array.Clear(keyAndIV, 0, keyAndIV.Length);
             Array.Clear(myKey, 0, myKey.Length);
             Array.Clear(myIV, 0, myIV.Length);
         }
@@ -152,7 +152,7 @@ public class DecryptFileCommand : PSCmdlet {
     private String outputFile; 
 
     [Parameter(
-        Position=3,
+        Position=2,
         Mandatory=true
     )]
     public SecureString Password
@@ -165,7 +165,6 @@ public class DecryptFileCommand : PSCmdlet {
     protected override void ProcessRecord()
     {
         byte[] salt = new byte[8]; 
-        byte[] keyAndIV = new byte[256/8];
         byte[] myKey = new byte[128/8];
         byte[] myIV = new byte[128/8];
 
@@ -177,11 +176,10 @@ public class DecryptFileCommand : PSCmdlet {
             using (FileStream fsIn = new FileStream(inputFile, FileMode.Open))
             {
                 fsIn.Read(salt, 0, salt.Length);
-                keyAndIV = KeyDeriver.GetKeyAndIV(password, salt);
+                myKey = KeyDeriver.GetKey(password, salt);
                 // read the IV from the file header (don't reuse the IV or the Salt)
                 fsIn.Read(myIV, 0, myIV.Length);
                 Aes.IV = myIV;
-                Array.Copy(keyAndIV, 0, myKey, 0, 128/8);
                 Aes.Key = myKey;
                 Aes.Padding = PaddingMode.PKCS7;
                 // Create an encryptor to perform the stream transform.
@@ -203,7 +201,7 @@ public class DecryptFileCommand : PSCmdlet {
                             while ( (read = fsIn.Read(buffer, 0, buffer.Length)) > 0 )
                             {
                                 bytesRead += read;
-                                WriteDebug(String.Format("Read {0} bytes",read));
+                                WriteDebug(String.Format("Read {0} bytes", read));
                                 WriteProgress(new ProgressRecord( 1, inputFile, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
                                 // for the last block, only write the correct number of bytes
                                 cryptoStream.Write(buffer, 0, read);
@@ -217,10 +215,9 @@ public class DecryptFileCommand : PSCmdlet {
             WriteError(new ErrorRecord(e, "There was an error", ErrorCategory.DeviceError, null ));
         } finally
         {
-                Array.Clear(salt, 0, salt.Length); 
-                Array.Clear(keyAndIV, 0, keyAndIV.Length);
-                Array.Clear(myKey, 0, myKey.Length);
-                Array.Clear(myIV, 0, myIV.Length);
+            Array.Clear(salt, 0, salt.Length); 
+            Array.Clear(myKey, 0, myKey.Length);
+            Array.Clear(myIV, 0, myIV.Length);
         }
     }
 }
@@ -253,13 +250,13 @@ public class KeyDeriver {
         return randBytes;
     }
 
-    /* Returns a byte array containing a (secret) 128-bit key and an IV in the encryption  */
-    public static byte[] GetKeyAndIV(SecureString password, byte[] salt)
+    /* Returns a byte array containing a (secret) 128-bit key derived from the password and salt.*/
+    public static byte[] GetKey(SecureString password, byte[] salt)
     { 
         
         using (Rfc2898DeriveBytes rdb = new Rfc2898DeriveBytes(SecureStringToByteArray(password), salt, 1024))
         {
-            return rdb.GetBytes(256); // Key and IV 
+            return rdb.GetBytes(128/8); // Key 
         }
     }
 
