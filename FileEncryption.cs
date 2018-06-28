@@ -70,8 +70,14 @@ public class EncryptFileCommand : PSCmdlet {
 
         try 
         {
-            // Resolve file paths
+            if (!KeyDeriver.IsPasswordComplex(password, this) )
+            {
+                throw new ArgumentException(
+                    String.Format("Password is not complex enough. It should be {0} characters long and have at least one upper, lower, digit and punctuation character", KeyDeriver.minPasswordLength)
+                    );
+            }
 
+            // Resolve file paths
             // This will hold information about the provider containing
             // the items that this path string might resolve to.                
             ProviderInfo provider;
@@ -95,6 +101,7 @@ public class EncryptFileCommand : PSCmdlet {
                 return;
             }
             WriteVerbose(String.Format("Encrypting {0} to {1}", inputFilePath, outputFilePath));
+
             using(AesManaged Aes = new AesManaged() )
             {
                 // Generate random salt and IV for each encryption session to avoid plaintext attacks
@@ -161,23 +168,23 @@ public class DecryptFileCommand : PSCmdlet {
         Position=0,
         Mandatory=true
     )]
-    public FileInfo InputFile
+    public String InputFile
     {
         get {return inputFile;}
         set {inputFile = value;}
     }
-    private FileInfo inputFile; 
+    private String inputFile; 
 
     [Parameter(
         Position=1,
         Mandatory=true
     )]
-    public FileInfo OutputFile
+    public String OutputFile
     {
         get {return outputFile;}
         set {outputFile = value;}
     }
-    private FileInfo outputFile; 
+    private String outputFile; 
 
     [Parameter(
         Position=2,
@@ -186,9 +193,12 @@ public class DecryptFileCommand : PSCmdlet {
     public SecureString Password
     {
         get {return password;}
-        set {password = value;}
+        set {
+                password = value;
+        }
     }
     private SecureString password;
+
 
     protected override void ProcessRecord()
     {
@@ -198,10 +208,41 @@ public class DecryptFileCommand : PSCmdlet {
 
         try
         {
+            if (!KeyDeriver.IsPasswordComplex(password, this) )
+            {
+                throw new ArgumentException(
+                    String.Format("Password is not complex enough. It should be {0} characters long and have at least one upper, lower, digit and punctuation character", KeyDeriver.minPasswordLength)
+                    );
+            }
+            // Resolve file paths
+            // This will hold information about the provider containing
+            // the items that this path string might resolve to.                
+            ProviderInfo provider;
+            // This will be used by the method that processes literal paths
+            PSDriveInfo drive;
+            string inputFilePath = this.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+                        inputFile, out provider, out drive);
+            if (KeyDeriver.IsFileSystemPath(provider, inputFilePath, this) == false) 
+            {   
+                return;
+            }
+
+            string outputFilePath = this.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+                        outputFile, out provider, out drive);
+            if (KeyDeriver.IsFileSystemPath(provider, outputFilePath, this) == false) 
+            {   
+                return;
+            }
+            if (! ShouldProcess(String.Format("{0}->{1}", inputFilePath, outputFilePath ), "Encrypt"))
+            {   
+                return;
+            }
+            WriteVerbose(String.Format("Decrypting {0} to {1}", inputFilePath, outputFilePath));
+
             using(AesManaged Aes = new AesManaged() )
             {
             // read the salt from the file header
-            using (FileStream fsIn = new FileStream(inputFile.FullName, FileMode.Open))
+            using (FileStream fsIn = new FileStream(inputFilePath, FileMode.Open))
             {
                 fsIn.Read(salt, 0, salt.Length);
                 myKey = KeyDeriver.GetKey(password, salt);
@@ -215,12 +256,12 @@ public class DecryptFileCommand : PSCmdlet {
                 int offset = salt.Length + myIV.Length;
 
                 // Create the streams used for encryption.
-                using (FileStream fsCrypt = new FileStream(outputFile.FullName, FileMode.Create))
+                using (FileStream fsCrypt = new FileStream(outputFilePath, FileMode.Create))
                 {
                     using (CryptoStream cryptoStream = new CryptoStream(fsCrypt, decryptor, CryptoStreamMode.Write))
                     {
                             // Write the data to the stream
-                            Int64 fileSizeInBytes = inputFile.Length;
+                            Int64 fileSizeInBytes = (new FileInfo(inputFile)).Length;
                             int read = 0;
                             // Buffer to optimize decryption but avoid memory exhaustion
                             byte[] buffer = new byte[Aes.BlockSize*1024];
@@ -230,7 +271,7 @@ public class DecryptFileCommand : PSCmdlet {
                             {
                                 bytesRead += read;
                                 WriteDebug(String.Format("Read {0} bytes", read));
-                                WriteProgress(new ProgressRecord( 1, inputFile.Name, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
+                                WriteProgress(new ProgressRecord( 1, inputFilePath, String.Format("{0} B of {1}", bytesRead, fileSizeInBytes)));
                                 // for the last block, only write the correct number of bytes
                                 cryptoStream.Write(buffer, 0, read);
                             }
@@ -251,7 +292,8 @@ public class DecryptFileCommand : PSCmdlet {
 }
 
 public class KeyDeriver {
-    public const int AESKeySize=256; // in bits
+    public const int AESKeySize = 256; // in bits
+    public const int minPasswordLength = 8;
     /* 
     Create a pseudo random byte array value of arbitrary length 
     */
@@ -320,5 +362,61 @@ public class KeyDeriver {
             isFileSystem = false;
         }
         return isFileSystem;
+    }
+    public static bool IsPasswordComplex(SecureString password, PSCmdlet context)
+    {
+        bool hasUpper = false;
+        bool hasLower = false;
+        bool hasDigit = false;
+        bool hasPunctuation = false;
+        bool hasNonPrint = false;
+        bool isLongEnough = false;
+
+        byte[] toValidate = SecureStringToByteArray(password);
+        
+        if (toValidate.Length >= KeyDeriver.minPasswordLength) isLongEnough = true;
+
+        foreach(byte chr in toValidate)
+        {
+            if  (chr <= 31  || chr >= 127)
+            {
+                // don't allow non-print chrs
+                hasNonPrint = true;
+                break;
+            }
+            if  (48 <= chr  && chr <= 57) 
+            {
+                hasDigit=true;
+                continue;
+            } 
+            if (65 <= chr && chr <= 90)
+            {
+                hasUpper = true;
+                continue;
+            }
+            if (97 <= chr && chr <= 122)
+            {
+                hasLower = true;
+                continue;
+            }
+            else
+            {
+                // other printable chr, so must be punctuation
+                hasPunctuation = true;
+            }
+        }
+        // Clean up the heap
+        Array.Clear(toValidate, 0, toValidate.Length);
+        string msg = @"
+        hasUpper: {0}
+        hasLower: {1}
+        hasDigit: {2}
+        hasPunctuation: {3}
+        hasNonPrint: {4}
+        isLongEnough: {5}
+        ";
+        context.WriteVerbose(String.Format(msg, hasUpper, hasLower, hasDigit, hasPunctuation, hasNonPrint, isLongEnough));
+        if (hasNonPrint || !isLongEnough) return false;
+        return hasDigit && hasUpper && hasLower && hasPunctuation; 
     }
 }
